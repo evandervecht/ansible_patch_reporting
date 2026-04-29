@@ -1,0 +1,22 @@
+$ErrorActionPreference = 'Stop'
+
+$hostnameVal = (hostname).Trim()
+$outputFile  = '{{ output_file_windows }}'
+$apiUrl      = '{{ api_base_url }}/api/ingest/patches/windows?hostname=' + $hostnameVal
+
+# Collect host + patch info as raw text
+$content = @()
+$content += '=== Hostname ==='
+$content += $hostnameVal
+$content += ''
+$content += '=== Get-HotFix ==='
+$content += (Get-HotFix | Format-Table -AutoSize | Out-String)
+
+$content | Out-File -FilePath $outputFile -Encoding UTF8
+
+# Upload the file as raw text to the ingest API
+Invoke-RestMethod `
+    -Uri $apiUrl `
+    -Method Post `
+    -ContentType 'text/plain' `
+    -InFile $outputFile

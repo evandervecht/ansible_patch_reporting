@@ -1,0 +1,15 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Test caches
+.pytest_cache/
+
+# Ansible runtime
+.ansible/
+
+# OS
+.DS_Store

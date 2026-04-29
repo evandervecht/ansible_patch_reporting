@@ -1,0 +1,93 @@
+---
+# Schedules a patch-info collector on each host:
+#   - Windows: scheduled task running PowerShell as a configurable user (default SYSTEM)
+#   - Linux:   cron job running a bash script as a configurable user (default root)
+# Each script collects host + patch info, writes it to {{ output_file }}, and POSTs it
+# to {{ api_base_url }}/api/ingest/patches/{windows|linux}?hostname=...
+
+- name: Schedule Windows patch check
+  hosts: windows
+  gather_facts: false
+  vars:
+    task_user_windows: SYSTEM
+    api_base_url: "http://api:8052"
+    script_dir_windows: 'C:\ProgramData\patch_check'
+    script_path_windows: 'C:\ProgramData\patch_check\patch_check.ps1'
+    output_file_windows: 'C:\ProgramData\patch_check\patches.txt'
+    schedule_hour: 2
+    schedule_minute: 0
+  tasks:
+    - name: Ensure script directory exists
+      ansible.windows.win_file:
+        path: "{{ script_dir_windows }}"
+        state: directory
+
+    - name: Deploy PowerShell patch check script
+      ansible.windows.win_template:
+        src: templates/patch_check.ps1.j2
+        dest: "{{ script_path_windows }}"
+
+    - name: Create scheduled task for patch check
+      community.windows.win_scheduled_task:
+        name: PatchCheck
+        description: Collect patch info and upload to ingest API
+        actions:
+          - path: powershell.exe
+            arguments: '-NoProfile -ExecutionPolicy Bypass -File "{{ script_path_windows }}"'
+        triggers:
+          - type: daily
+            start_boundary: "2026-01-01T{{ '%02d' | format(schedule_hour) }}:{{ '%02d' | format(schedule_minute) }}:00"
+        username: "{{ task_user_windows }}"
+        run_level: highest
+        logon_type: service_account
+        state: present
+        enabled: true
+
+- name: Schedule Linux patch check
+  hosts: linux
+  # gather_facts and the file/template/cron modules require Python on the
+  # managed host. We avoid all of them: render the bootstrap locally, then
+  # transfer + run it via `script`, which only needs POSIX shell on target.
+  gather_facts: false
+  become: true
+  vars:
+    task_user_linux: root
+    api_base_url: "http://api:8052"
+    script_path_linux: /usr/local/bin/patch_check.sh
+    output_dir_linux: /var/lib/patch_check
+    output_file_linux: /var/lib/patch_check/patches.txt
+    schedule_hour: 2
+    schedule_minute: 0
+  tasks:
+    - name: Provision patch check via no-Python bootstrap
+      block:
+        - name: Allocate local temp file for rendered bootstrap
+          ansible.builtin.tempfile:
+            state: file
+            suffix: .sh
+          delegate_to: localhost
+          become: false
+          register: local_tmp
+          changed_when: false
+
+        - name: Render bootstrap script locally
+          ansible.builtin.template:
+            src: templates/setup.sh.j2
+            dest: "{{ local_tmp.path }}"
+            mode: '0755'
+          delegate_to: localhost
+          become: false
+
+        - name: Execute bootstrap on target (no Python required)
+          ansible.builtin.script:
+            cmd: "{{ local_tmp.path }}"
+
+      always:
+        - name: Remove local rendered bootstrap
+          ansible.builtin.file:
+            path: "{{ local_tmp.path }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: local_tmp.path is defined
+          changed_when: false

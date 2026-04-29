@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Bootstrap script: installs the patch_check.sh script and a cron entry.
+# Designed to be transferred + executed by Ansible's `script` module so the
+# managed host needs only POSIX shell + cron — no Python.
+set -euo pipefail
+
+OUTPUT_DIR='{{ output_dir_linux }}'
+SCRIPT_PATH='{{ script_path_linux }}'
+TASK_USER='{{ task_user_linux }}'
+CRON_FILE='/etc/cron.d/patch_check'
+
+# Ensure output directory exists with correct ownership
+mkdir -p "$OUTPUT_DIR"
+chown "$TASK_USER" "$OUTPUT_DIR"
+chmod 0755 "$OUTPUT_DIR"
+
+# Write the patch check script. Single-quoted heredoc delimiter prevents the
+# *outer* shell (this setup script) from expanding $VARS that belong to the
+# *inner* script — those expand later, when cron runs patch_check.sh.
+cat > "$SCRIPT_PATH" <<'PATCH_CHECK_SCRIPT_EOF'
+{% include 'patch_check.sh.j2' %}
+PATCH_CHECK_SCRIPT_EOF
+
+chmod 0755 "$SCRIPT_PATH"
+chown "$TASK_USER" "$SCRIPT_PATH"
+
+# Install cron entry. /etc/cron.d/* is the canonical drop-in location and
+# overwriting it is naturally idempotent.
+cat > "$CRON_FILE" <<CRON_EOF
+{{ schedule_minute }} {{ schedule_hour }} * * * $TASK_USER $SCRIPT_PATH
+CRON_EOF
+chmod 0644 "$CRON_FILE"

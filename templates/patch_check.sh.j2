@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+HOSTNAME_VAL="$(hostname)"
+OUTPUT_FILE='{{ output_file_linux }}'
+API_URL='{{ api_base_url }}/api/ingest/patches/linux?hostname='"${HOSTNAME_VAL}"
+
+{
+    echo "=== Hostname ==="
+    echo "${HOSTNAME_VAL}"
+    echo
+    echo "=== OS Information ==="
+    if [[ -r /etc/os-release ]]; then
+        cat /etc/os-release
+    else
+        uname -a
+    fi
+    echo
+    echo "=== Available Patches ==="
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq >/dev/null 2>&1 || true
+        apt-get -s upgrade 2>/dev/null || true
+    elif command -v dnf >/dev/null 2>&1; then
+        # dnf check-update exits 100 when updates are available
+        dnf check-update || true
+    elif command -v yum >/dev/null 2>&1; then
+        # yum check-update exits 100 when updates are available
+        yum check-update || true
+    else
+        echo "No supported package manager found"
+    fi
+} > "${OUTPUT_FILE}"
+
+curl -sS -X POST \
+    "${API_URL}" \
+    -H "Content-Type: text/plain" \
+    --data-binary "@${OUTPUT_FILE}"
