@@ -97,22 +97,33 @@ uv run ansible-galaxy collection install -r requirements.yml
 
 ## Inventory example
 
+Use SSH keys for Linux and either Kerberos or a vaulted password for Windows.
+**Never commit plaintext passwords** — store them with `ansible-vault encrypt_string`
+and reference them as `{{ vaulted_var }}`.
+
 ```ini
 # inventory.ini
 [windows]
-win-host-01 ansible_user=Administrator ansible_password=... ansible_connection=winrm
+win-host-01 ansible_connection=winrm ansible_winrm_transport=kerberos
 
 [linux]
-lin-host-01 ansible_user=ubuntu
+lin-host-01 ansible_user=ubuntu  # SSH key auth via ~/.ssh/config or -i
 
 [windows:vars]
 task_user_windows=SYSTEM
 api_base_url=https://patch-api.example.com
+ansible_user=Administrator
+ansible_password={{ winrm_password }}     # from ansible-vault
 
 [linux:vars]
 task_user_linux=root
 api_base_url=https://patch-api.example.com
 ```
+
+The `api_base_url` accepts both `http://` and `https://`. HTTPS is the right choice
+when the API is reachable across a trust boundary (the Internet, a shared VLAN, etc.);
+HTTP is acceptable only on a fully internal network where you control every hop.
+The script verifies TLS by default for `https://` URLs.
 
 ## Running the playbook
 
@@ -128,6 +139,32 @@ uv run ansible-playbook -i inventory.ini playbook.yml \
     -e api_base_url=https://patch-api.example.com \
     -e schedule_hour=4
 ```
+
+## Security posture
+
+The runtime scripts and bootstrap are hardened by default:
+
+- **Permissions** — output directory and `patch_check.sh` are `chmod 0700`, owned by
+  `task_user_linux`. The Linux script runs `umask 077` so the report file is `0600`.
+  The Windows report file has its ACL replaced with `SYSTEM` + `Administrators` only.
+- **Input handling** — the hostname is URL-encoded before being put into the upload
+  URL (bash inline encoder; `[uri]::EscapeDataString` on Windows).
+- **Request limits** — both clients have explicit timeouts (`--connect-timeout 10
+  --max-time 60` for curl, `-TimeoutSec 60` for `Invoke-RestMethod`) so a hung server
+  cannot pin the cron task indefinitely. curl uses `--fail-with-body` so HTTP errors
+  surface as a non-zero exit.
+- **Templating** — Jinja-injected shell vars in `setup.sh.j2` go through Ansible's
+  `| quote` filter, so a misconfigured value cannot break out of the shell quoting.
+- **Supply chain** — Ansible collections in `requirements.yml` are pinned to specific
+  versions. Python deps are pinned via `uv.lock`.
+- **Encryption in transit** — TLS is verified by default when `api_base_url` uses
+  `https://`. Both `http://` and `https://` are supported; see the inventory section.
+
+The remaining open item — and the biggest one if your API crosses any untrusted
+network — is **authenticating uploads**. Anyone who can reach the ingest endpoint can
+spoof reports because hostname is the only identifier. To fix: add an `Authorization:
+Bearer …` header on both clients and a vaulted `api_token` variable per host (or per
+inventory group), then verify the token on the API. mTLS is a stronger alternative.
 
 ## Why no Python on managed hosts
 

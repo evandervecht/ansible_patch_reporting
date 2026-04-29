@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
-# Bootstrap script: installs the patch_check.sh script and a cron entry.
-# Designed to be transferred + executed by Ansible's `script` module so the
-# managed host needs only POSIX shell + cron — no Python.
+# Bootstrap: installs patch_check.sh + cron entry. Designed to be transferred
+# and executed by Ansible's `script` module so the managed host needs only
+# POSIX shell + cron — no Python.
 set -euo pipefail
+umask 077
 
-OUTPUT_DIR='{{ output_dir_linux }}'
-SCRIPT_PATH='{{ script_path_linux }}'
-TASK_USER='{{ task_user_linux }}'
+# Jinja `| quote` filter wraps the value in single quotes and escapes any
+# embedded quotes — preventing operator-supplied vars from breaking out of
+# the shell quoting.
+OUTPUT_DIR={{ output_dir_linux | quote }}
+SCRIPT_PATH={{ script_path_linux | quote }}
+TASK_USER={{ task_user_linux | quote }}
 CRON_FILE='/etc/cron.d/patch_check'
 
-# Ensure output directory exists with correct ownership
+# Output dir: only the task user reads/writes. Patch reports describe what
+# is *not* fixed on the host, so they shouldn't be world-readable.
 mkdir -p "$OUTPUT_DIR"
 chown "$TASK_USER" "$OUTPUT_DIR"
-chmod 0755 "$OUTPUT_DIR"
+chmod 0700 "$OUTPUT_DIR"
 
 # Write the patch check script. Single-quoted heredoc delimiter prevents the
 # *outer* shell (this setup script) from expanding $VARS that belong to the
@@ -21,12 +26,13 @@ cat > "$SCRIPT_PATH" <<'PATCH_CHECK_SCRIPT_EOF'
 {% include 'patch_check.sh.j2' %}
 PATCH_CHECK_SCRIPT_EOF
 
-chmod 0755 "$SCRIPT_PATH"
 chown "$TASK_USER" "$SCRIPT_PATH"
+chmod 0700 "$SCRIPT_PATH"
 
-# Install cron entry. /etc/cron.d/* is the canonical drop-in location and
-# overwriting it is naturally idempotent.
+# /etc/cron.d/* must be 0644 root-owned for cron to honour it; the cron line
+# itself doesn't contain secrets so this is fine.
 cat > "$CRON_FILE" <<CRON_EOF
 {{ schedule_minute }} {{ schedule_hour }} * * * $TASK_USER $SCRIPT_PATH
 CRON_EOF
+chown root:root "$CRON_FILE"
 chmod 0644 "$CRON_FILE"

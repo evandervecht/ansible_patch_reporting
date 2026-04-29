@@ -1,9 +1,36 @@
 #!/usr/bin/env bash
+# Hardened: 0600 output via umask, request timeouts, URL-encoded hostname.
+# Works against both http:// and https:// ingest URLs — TLS is verified by
+# curl's default behaviour when the scheme is https.
 set -uo pipefail
+umask 077
+
+OUTPUT_FILE='{{ output_file_linux }}'
+API_BASE='{{ api_base_url }}'
 
 HOSTNAME_VAL="$(hostname)"
-OUTPUT_FILE='{{ output_file_linux }}'
-API_URL='{{ api_base_url }}/api/ingest/patches/linux?hostname='"${HOSTNAME_VAL}"
+
+# RFC 3986 unreserved-only encoder. Hostnames are ASCII per RFC 1123 so a
+# byte-wise loop is sufficient; this is defence-in-depth against an unusual
+# hostname injecting query parameters into the upload URL.
+# `{% raw %}` shields `${#s}` from Jinja, which would otherwise read `{#`
+# as a Jinja comment opener.
+{% raw %}
+urlencode() {
+    local s="$1" i ch out=""
+    for (( i = 0; i < ${#s}; i++ )); do
+        ch="${s:i:1}"
+        case "$ch" in
+            [a-zA-Z0-9.~_-]) out+="$ch" ;;
+            *) out+=$(printf '%%%02X' "'$ch") ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+{% endraw %}
+
+HOSTNAME_ENC="$(urlencode "$HOSTNAME_VAL")"
+API_URL="${API_BASE}/api/ingest/patches/linux?hostname=${HOSTNAME_ENC}"
 
 {
     echo "=== Hostname ==="
@@ -31,7 +58,11 @@ API_URL='{{ api_base_url }}/api/ingest/patches/linux?hostname='"${HOSTNAME_VAL}"
     fi
 } > "${OUTPUT_FILE}"
 
-curl -sS -X POST \
+curl -sS \
+    --connect-timeout 10 \
+    --max-time 60 \
+    --fail-with-body \
+    -X POST \
     "${API_URL}" \
     -H "Content-Type: text/plain" \
     --data-binary "@${OUTPUT_FILE}"

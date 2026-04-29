@@ -2,21 +2,36 @@ $ErrorActionPreference = 'Stop'
 
 $hostnameVal = (hostname).Trim()
 $outputFile  = '{{ output_file_windows }}'
-$apiUrl      = '{{ api_base_url }}/api/ingest/patches/windows?hostname=' + $hostnameVal
+$apiBase     = '{{ api_base_url }}'
 
-# Collect host + patch info as raw text
-$content = @()
-$content += '=== Hostname ==='
-$content += $hostnameVal
-$content += ''
-$content += '=== Get-HotFix ==='
-$content += (Get-HotFix | Format-Table -AutoSize | Out-String)
+# URL-encode the hostname before embedding it as a query parameter.
+$apiUrl = $apiBase + '/api/ingest/patches/windows?hostname=' + [uri]::EscapeDataString($hostnameVal)
 
-$content | Out-File -FilePath $outputFile -Encoding UTF8
+# Build the report content
+$lines = @(
+    '=== Hostname ===',
+    $hostnameVal,
+    '',
+    '=== Get-HotFix ===',
+    (Get-HotFix | Format-Table -AutoSize | Out-String)
+)
 
-# Upload the file as raw text to the ingest API
+# Write as UTF-8 *without* BOM. `-Encoding UTF8` on Windows PowerShell 5.1
+# prepends a BOM that some HTTP backends mis-handle as part of the body.
+[System.IO.File]::WriteAllText(
+    $outputFile,
+    ($lines -join [Environment]::NewLine),
+    [System.Text.UTF8Encoding]::new($false)
+)
+
+# Lock the report file: only SYSTEM and Administrators can read it.
+& icacls $outputFile /inheritance:r /grant:r 'NT AUTHORITY\SYSTEM:(F)' 'BUILTIN\Administrators:(F)' | Out-Null
+
+# Upload. Works for both http:// and https:// — TLS is verified by default
+# for https URLs.
 Invoke-RestMethod `
     -Uri $apiUrl `
     -Method Post `
     -ContentType 'text/plain' `
-    -InFile $outputFile
+    -InFile $outputFile `
+    -TimeoutSec 60
