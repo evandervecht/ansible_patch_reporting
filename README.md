@@ -174,3 +174,7 @@ PowerShell -ExecutionPolicy Bypass -File C:\ProgramData\patch_check\patch_check.
 # Linux
 sudo /usr/local/bin/patch_check.sh
 ```
+
+## License
+
+[MIT](LICENSE) © Ellert van der Vecht
